@@ -1,0 +1,272 @@
+---
+title: "Tower4Analysis"
+author: "Tryston Ingram"
+date: "2023-04-14"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Tower 4 Analysis
+
+```{r}
+library(odbc)
+
+```
+
+```{r}
+# install.packages("odbc")
+# install.packages("DBI")
+# install.packages("tidyverse")
+ 
+library(odbc)
+library(DBI)
+library(tidyverse)
+```
+
+
+
+
+```{r, results = FALSE}
+sort(unique(odbcListDrivers()[[1]]))
+```
+
+```{r}
+OPA_Database <- DBI::dbConnect(odbc(),
+Driver = "ODBC Driver 13 for SQL Server",
+Server = "10.67.5.44",
+Database = "OPA",
+UID = "opa_group",
+PWD = 'U7(BvF7QOb51',
+TrustServerCertificate = 'Yes')
+```
+
+
+```{r}
+con <- DBI::dbConnect(odbc(),
+Driver = "ODBC Driver 13 for SQL Server",
+Server = "10.67.5.44",
+Database = "OPA",
+UID = "opa_group",
+PWD = 'U7(BvF7QOb51',
+TrustServerCertificate = 'Yes')
+```
+
+
+
+```{r}
+df <- dbGetQuery(con, "SELECT AVG(TOTAL_THEORETICAL_WIN) AS AVG_THEO_WIN, subQuery.PATRON_ACCOUNT_NBR, GAMING_MONTH
+FROM (
+SELECT TOTAL_THEORETICAL_WIN, DA.PATRON_ACCOUNT_NBR, LEFT(GAMING_DATE,7) AS GAMING_MONTH, 
+CASE 
+        WHEN DATE_CREATED > '2022-12-20' THEN 'NEW_CUSTOMER'
+        ELSE 'PREVIOUS_CUSTOMER'
+        END AS PATRON_STATUS
+
+FROM OPA.DASH.CFPTA_KEY_FIELDS_CACHE DA
+
+LEFT JOIN Production.Patron.DailyRatedSignupsByDemographicBins PA
+    on DA.PATRON_ACCOUNT_NBR=PA.PATRON_ACCOUNT_NBR
+    AND DA.SOURCE_PROP=PA.SOURCE_PROP
+
+WHERE GAMING_DATE >= '2022-04-01'
+    AND DA.SOURCE_PROP = 'WS'
+
+) AS subQuery
+
+WHERE PATRON_STATUS = 'PREVIOUS_CUSTOMER'
+GROUP BY GAMING_MONTH, subQuery.PATRON_ACCOUNT_NBR
+ORDER BY GAMING_MONTH")
+
+```
+
+
+```{r}
+#Create a new dataframe that has only Data from April 22 to December 22
+pret4 <- filter(df, GAMING_MONTH <= '2022-12')
+```
+
+```{r}
+#Create a new dataframe that has only data from January 23 to April 23
+postt4 <- filter(df, GAMING_MONTH >= '2023-01')
+```
+
+
+
+
+```{r}
+#Aggregate pre tower4 dataframe. Finding the monthly average for months April 2022 - Dec 2022 (pre tower4)
+agpret4 <- aggregate(AVG_THEO_WIN~PATRON_ACCOUNT_NBR, data=pret4, mean)
+agpret4[agpret4$PATRON_ACCOUNT_NBR == '2822275',]
+```
+
+```{r}
+#Validating average total theo win with the original pret4 dataset
+pret4[pret4$PATRON_ACCOUNT_NBR == '2822275',]
+```
+
+
+
+
+```{r}
+#Aggregate post tower4 dataframe. Finding monthly average for months Jan 2023 - April 2023 (post tower4)
+agpostt4 <- aggregate(AVG_THEO_WIN~PATRON_ACCOUNT_NBR, data=postt4, mean)
+agpostt4[agpostt4$PATRON_ACCOUNT_NBR == '2822275',]
+```
+
+
+```{r}
+#Validating average total theo win with postt4 dataset
+postt4[postt4$PATRON_ACCOUNT_NBR == '2822275',]
+```
+
+
+```{r}
+#vecotrize post tower4 patronsf and pretower4 patrons for easier manipulation
+postpatrons=agpostt4[['PATRON_ACCOUNT_NBR']]
+prepatrons=agpret4[['PATRON_ACCOUNT_NBR']]
+```
+
+```{r}
+#Determine number of matches. Ensure this number matches the number of rows with the merged dataframe
+#(only contain patron account numbers that appear in both the pre and post tower 4 dataframes)
+library(tidyverse)
+matches <- intersect(prepatrons,postpatrons)
+nummatches <- length(matches)
+nummatches
+#Create new dataframe containing only patrons in the list of matches. Create column for AVG_THEO_WIN_DIFF in advance.
+#This will become the finaldf
+mergeddata <- agpret4
+mergeddata <- mergeddata %>% filter(
+  agpret4$PATRON_ACCOUNT_NBR %in% postpatrons
+  )
+colnames(mergeddata)[colnames(mergeddata) == 'AVG_THEO_WIN'] <- 'AVG_THEO_WIN_DIFF'
+```
+
+```{r}
+#Result of this function is returned as a percentage. Example ~ 15.25 = 15.25% increase
+percentage_difference <- function(original, new) {
+  #percent increase
+  result = 0
+  if(new > original){
+    increase = new - original
+    percent_increase = (increase / original) * 100
+    result = percent_increase
+    if(original == 0){
+      result = 100
+    }
+  }
+  #percent decrease
+  if(original > new){
+    decrease = original - new
+    percent_decrease = (decrease / original) * 100
+    result = percent_decrease * -1
+  }
+  #no percent change
+  if(original == new){
+    result = 0
+  }
+  
+  result
+} 
+```
+
+
+```{r, results=FALSE}
+#Now that I know the specific matches for patrons, filter the agpret4 and agpostt4 datasets to include only the matches and sort on the patron account number so that the indexes match one another and a for loop can be configured to calculate the percentage differences with the above function
+finalpret4 <- agpret4 %>% filter(
+  agpret4$PATRON_ACCOUNT_NBR %in% matches
+  )
+finalpret4[order(finalpret4$PATRON_ACCOUNT_NBR), ]
+
+
+finalpostt4 <- agpostt4 %>% filter(
+  agpostt4$PATRON_ACCOUNT_NBR %in% matches
+  )
+finalpostt4[order(finalpostt4$PATRON_ACCOUNT_NBR), ]
+
+```
+```{r}
+#Loop through the matched patrons now that indices match one another and fince percentage difference from pretower4 -> posttower4
+percentchanges <- c()
+for(i in 1:length(matches)){
+percentchanges[i] <- percentage_difference(finalpret4$AVG_THEO_WIN[i],finalpostt4$AVG_THEO_WIN[i])
+}
+percentchanges <- round(percentchanges,digits=2)
+```
+
+```{r}
+#Represents each patrons percentage difference pre and post tower4 (December)
+#These values will populate the finaldf column 'AVG_THEO_WIN_DIFF' made previously
+mergeddata$AVG_THEO_WIN_DIFF <- percentchanges
+
+
+finaldf <- mergeddata %>% mutate(PATRON_STATUS =
+                     case_when(AVG_THEO_WIN_DIFF > 10 ~ "Increasing", 
+                               AVG_THEO_WIN_DIFF < -10 ~ "Decreasing",
+                               AVG_THEO_WIN_DIFF >= -10 ~ "Maintaining",
+                               AVG_THEO_WIN_DIFF <= 10 ~ "Maintaining")
+)
+head(finaldf)
+```
+
+
+```{r}
+#Find number of new customers since tower4. Vectorize this and add to PATRON_STATUS. Create pie chart
+newpatrondf <- dbGetQuery(con, "SELECT AVG(TOTAL_THEORETICAL_WIN) AS AVG_THEO_WIN, subQuery.PATRON_ACCOUNT_NBR, GAMING_MONTH, PATRON_STATUS
+FROM (
+SELECT TOTAL_THEORETICAL_WIN, DA.PATRON_ACCOUNT_NBR, LEFT(GAMING_DATE,7) AS GAMING_MONTH, 
+CASE 
+        WHEN DATE_CREATED > '2022-12-20' THEN 'NEW_CUSTOMER'
+        ELSE 'PREVIOUS_CUSTOMER'
+        END AS PATRON_STATUS
+
+FROM OPA.DASH.CFPTA_KEY_FIELDS_CACHE DA
+
+LEFT JOIN Production.Patron.DailyRatedSignupsByDemographicBins PA
+    on DA.PATRON_ACCOUNT_NBR=PA.PATRON_ACCOUNT_NBR
+    AND DA.SOURCE_PROP=PA.SOURCE_PROP
+
+WHERE GAMING_DATE >= '2022-04-01'
+    AND DA.SOURCE_PROP = 'WS'
+
+) AS subQuery
+
+WHERE PATRON_STATUS = 'NEW_CUSTOMER'
+GROUP BY GAMING_MONTH, subQuery.PATRON_ACCOUNT_NBR, PATRON_STATUS
+ORDER BY GAMING_MONTH")
+```
+
+```{r}
+#Aggregate newpatrondf
+agnewpatrondf <- aggregate(AVG_THEO_WIN~PATRON_ACCOUNT_NBR + PATRON_STATUS, data=newpatrondf, mean)
+library(stringr)
+agnewpatrondf$PATRON_STATUS <- str_replace(agnewpatrondf$PATRON_STATUS, "NEW_CUSTOMER", "New Customer")
+newpatrons <- pull(agnewpatrondf, PATRON_STATUS) 
+```
+
+
+
+```{r}
+#The sample for this graph consists of patrons who became carded members prior to Tower 4 Dec 12, 2022.
+#The graph displays monthly average of patrons grouped by 'patron status' which is determined by their percentage difference 
+#(monthly avg theo win from April to December 2022 - monthly avg theo win from January to April 2023)
+#If the percentage difference from pre tower 4 -> post tower 4 is greater than 10, Increasing
+#If the percentage difference from pre tower 4 -> post tower 4 is less than -10, Decreasing
+##If the percentage difference from pre tower 4 -> post tower 4 is <= 10 OR >=- 10, Maintaining
+
+#ADD NEW PATRONS TO THIS.
+library(lessR)
+library(ggplot2)
+library(RColorBrewer)
+#Adding newpatrons vector to patronstatus vector so they're added to the pie graph
+patronstatus <- c(finaldf$PATRON_STATUS, newpatrons)
+length(patronstatus)
+statusdf <- data.frame(status = patronstatus)
+PieChart(status, hole = 0, values = "%", data = statusdf,
+         fill = c("lightblue", "pink", "black", "purple"), main = "")
+```
+
+
